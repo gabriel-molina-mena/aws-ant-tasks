@@ -26,6 +26,8 @@ import com.amazonaws.ant.AWSAntTask;
 import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.transfer.TransferManager;
 import com.amazonaws.services.s3.transfer.Upload;
+import com.amazonaws.services.s3.transfer.MultipleFileUpload;
+import com.amazonaws.services.s3.transfer.Transfer;
 
 /**
  * Ant Task for uploading a fileset or filesets to S3.
@@ -34,6 +36,7 @@ public class UploadFileSetToS3Task extends AWSAntTask {
     private Vector<FileSet> filesets = new Vector<FileSet>();
     private String bucketName;
     private String keyPrefix;
+    private boolean directory = false;
     private boolean printStatusUpdates = false;
     private boolean continueOnFail = false;
     private int statusUpdatePeriodInMs = 500;
@@ -46,6 +49,10 @@ public class UploadFileSetToS3Task extends AWSAntTask {
      */
     public void addFileset(FileSet fileset) {
         filesets.add(fileset);
+    }
+
+    public void setDirectory(String directory) {
+        this.directory = new Boolean(directory);
     }
 
     /**
@@ -131,7 +138,7 @@ public class UploadFileSetToS3Task extends AWSAntTask {
     }
 
     /**
-     * Uploads files to S3
+     * Uploads files or directory to S3
      */
     @Override
 	public void execute() {
@@ -142,6 +149,14 @@ public class UploadFileSetToS3Task extends AWSAntTask {
         } else {
             transferManager = new TransferManager();
         }
+        if(!directory){
+            uploadFiles(transferManager);
+        }else{
+            uploadDirectory(transferManager);
+        }
+    }
+
+    private void uploadFiles(TransferManager transferManager){
         for (FileSet fileSet : filesets) {
             DirectoryScanner directoryScanner = fileSet.getDirectoryScanner(getProject());
             String[] includedFiles = directoryScanner.getIncludedFiles();
@@ -155,21 +170,7 @@ public class UploadFileSetToS3Task extends AWSAntTask {
                                 + "...");
                         Upload upload = transferManager.upload(bucketName, key, file);
                         if (printStatusUpdates) {
-                            while (!upload.isDone()) {
-                                System.out.print(upload.getProgress()
-                                        .getBytesTransferred()
-                                        + "/"
-                                        + upload.getProgress()
-                                                .getTotalBytesToTransfer()
-                                        + " bytes transferred...\r");
-                                Thread.sleep(statusUpdatePeriodInMs);
-                            }
-                            System.out.print(upload.getProgress()
-                                        .getBytesTransferred()
-                                        + "/"
-                                        + upload.getProgress()
-                                                .getTotalBytesToTransfer()
-                                        + " bytes transferred...\n");
+                            printStatusUpdates(upload);
                         } else {
                             upload.waitForCompletion();
                         }
@@ -190,4 +191,57 @@ public class UploadFileSetToS3Task extends AWSAntTask {
             }
         }
     }
+
+    private void uploadDirectory(TransferManager transferManager){
+        for (FileSet fileSet : filesets) {
+            DirectoryScanner directoryScanner = fileSet.getDirectoryScanner(getProject());
+            try {
+                File base = directoryScanner.getBasedir();
+                String key = keyPrefix + base.getName();
+                    
+                try {
+                    System.out.println("Uploading directory " + base.getName()
+                            + "...");
+                    MultipleFileUpload mfUpload = transferManager.uploadDirectory(bucketName, key, base, true);
+                    if (printStatusUpdates) {
+                        printStatusUpdates(mfUpload);
+                    } else {
+                        mfUpload.waitForCompletion();
+                    }
+                    System.out.println("Upload succesful");
+                } catch (Exception e) {
+                    if (!continueOnFail) {
+                        throw new BuildException(
+                                "Error. The directory that failed to upload was: "
+                                        + base.getName() + ": " + e, e);
+                    } else {
+                        System.err.println("The directory " + base.getName()
+                                + " failed to upload. Continuing...");
+                    }
+                }
+            } finally {
+                transferManager.shutdownNow(false);
+            }
+        }
+    }
+
+    private void printStatusUpdates(Transfer transfer) throws InterruptedException{
+        while (!transfer.isDone()) {
+            System.out.print(transfer.getProgress()
+                    .getBytesTransferred()
+                    + "/"
+                    + transfer.getProgress()
+                            .getTotalBytesToTransfer()
+                    + " bytes transferred...\r");
+            Thread.sleep(statusUpdatePeriodInMs);
+        }
+        System.out.print(transfer.getProgress()
+                    .getBytesTransferred()
+                    + "/"
+                    + transfer.getProgress()
+                            .getTotalBytesToTransfer()
+                    + " bytes transferred...\n");
+    }
+
+
 }
